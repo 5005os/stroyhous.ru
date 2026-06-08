@@ -142,14 +142,26 @@
   <div class="sheet" style="max-width:440px;">
     <div class="sheet-body">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-        <h2 style="font-size:24px;font-weight:800;">Вход</h2>
+        <h2 style="font-size:24px;font-weight:800;" id="login-title">Вход</h2>
         <button onclick="closeLogin()" style="background:var(--surface2);border:none;width:40px;height:40px;border-radius:50%;color:var(--text);font-size:18px;cursor:pointer;">✕</button>
       </div>
-      <div id="login-step-phone">
-        <p style="color:var(--muted);margin-bottom:16px;">Введите номер телефона</p>
-        <input id="phone-input" class="field" type="tel" placeholder="+7 ___ ___-__-__" value="+7">
-        <button class="checkout-btn" onclick="sendCode()">Получить код</button>
+
+      <!-- ВКЛАДКИ Вход / Регистрация -->
+      <div id="auth-tabs" style="display:flex;gap:8px;margin-bottom:20px;background:var(--surface2);padding:5px;border-radius:14px;">
+        <button id="tab-login" class="checkout-btn" style="margin:0;padding:12px;background:var(--accent);" onclick="setAuthMode('login')">Вход</button>
+        <button id="tab-reg" class="checkout-btn" style="margin:0;padding:12px;background:transparent;" onclick="setAuthMode('reg')">Регистрация</button>
       </div>
+
+      <!-- ШАГ 1: ввод данных -->
+      <div id="login-step-phone">
+        <div id="reg-name-wrap" class="hidden">
+          <input id="name-input" class="field" type="text" placeholder="Ваше имя">
+        </div>
+        <input id="phone-input" class="field" type="tel" placeholder="+7 ___ ___-__-__" value="+7">
+        <button class="checkout-btn" id="send-code-btn" onclick="sendCode()">Получить код</button>
+      </div>
+
+      <!-- ШАГ 2: ввод кода -->
       <div id="login-step-code" class="hidden">
         <p style="color:var(--muted);margin-bottom:4px;">Код отправлен на <span id="phone-display"></span></p>
         <div class="otp-inputs">
@@ -158,7 +170,7 @@
           <input maxlength="1" type="tel" oninput="otpMove(this,2)">
           <input maxlength="1" type="tel" oninput="otpMove(this,3)">
         </div>
-        <button class="checkout-btn" onclick="verifyCode()">Войти</button>
+        <button class="checkout-btn" onclick="verifyCode()">Подтвердить</button>
         <button onclick="backToPhone()" style="width:100%;background:none;border:none;color:var(--muted);margin-top:12px;cursor:pointer;font-family:inherit;font-size:14px;">← Изменить номер</button>
       </div>
     </div>
@@ -295,18 +307,74 @@
     if(currentShip==='courier'&&deliveryKm===null){alert('Введите адрес доставки и нажмите «Рассчитать»');return;}
     const sum=cartSum();let dp=0;
     if(currentShip==='courier'){const d=calcDelivery();dp=d&&!d.free?d.price:0;}
-    const shipName={pickup:'Самовывоз',ozon:'Ozon (пункт выдачи)',courier:'Курьером, '+deliveryAddr}[currentShip];
-    alert(`Заказ оформлен! ✅\n\nТелефон: ${user.phone}\nПолучение: ${shipName}\nТоваров на: ${fmt(sum)} ₽\nДоставка: ${dp?fmt(dp)+' ₽':'бесплатно'}\nИТОГО: ${fmt(sum+dp)} ₽\n\nМы свяжемся с вами для подтверждения.`);
-    cart={};deliveryKm=null;updateBadge();renderCart();
+    const shipName={pickup:'Самовывоз',ozon:'Ozon (пункт выдачи)',courier:'Курьером'}[currentShip];
+    const items=Object.entries(cart).map(([id,q])=>{const p=allProducts.find(x=>x.id===id);return{name:p?p.name:'',price:p?p.price:0,qty:q,emoji:p?emojiFor(p):'📦'};});
+    const order={
+      name:user.name||'',phone:user.phone,items:items,
+      sum:sum,delivery:shipName,address:currentShip==='courier'?deliveryAddr:'',
+      deliveryPrice:dp,total:sum+dp,status:'Принят',statusOrder:0,
+      createdAt:firebase.firestore.FieldValue.serverTimestamp()
+    };
+    const btn=document.getElementById('checkout-btn');
+    if(btn){btn.disabled=true;btn.textContent='Оформляем…';}
+    db.collection('orders').add(order).then(()=>{
+      alert(`Заказ оформлен! ✅\n\n${user.name}, ${user.phone}\nПолучение: ${shipName}${currentShip==='courier'?', '+deliveryAddr:''}\nТоваров на: ${fmt(sum)} ₽\nДоставка: ${dp?fmt(dp)+' ₽':'бесплатно'}\nИТОГО: ${fmt(sum+dp)} ₽\n\nМы свяжемся с вами для подтверждения.`);
+      cart={};deliveryKm=null;updateBadge();renderCart();
+    }).catch(err=>{
+      console.error(err);
+      alert('Не удалось оформить заказ. Попробуйте ещё раз.');
+      if(btn){btn.disabled=false;updateTotals();}
+    });
   }
-  function openLogin(){document.getElementById('login-modal').classList.add('open');}
+  function openLogin(){authMode='login';setAuthMode('login');backToPhone();document.getElementById('login-modal').classList.add('open');}
   function closeLogin(){document.getElementById('login-modal').classList.remove('open');}
   document.getElementById('login-modal').addEventListener('click',e=>{if(e.target.id==='login-modal')closeLogin();});
+
+  let authMode='login', pendingName='';
+  function setAuthMode(mode){
+    authMode=mode;
+    const isReg=mode==='reg';
+    document.getElementById('reg-name-wrap').classList.toggle('hidden',!isReg);
+    document.getElementById('login-title').textContent=isReg?'Регистрация':'Вход';
+    document.getElementById('tab-login').style.background=isReg?'transparent':'var(--accent)';
+    document.getElementById('tab-reg').style.background=isReg?'var(--accent)':'transparent';
+    document.getElementById('send-code-btn').textContent='Получить код';
+  }
+
   function sendCode(){
     const phone=document.getElementById('phone-input').value.trim();
-    if(phone.replace(/\D/g,'').length<11){alert('Введите корректный номер');return;}
+    if(phone.replace(/\D/g,'').length<11){alert('Введите корректный номер телефона');return;}
+    if(authMode==='reg'){
+      const name=document.getElementById('name-input').value.trim();
+      if(!name){alert('Введите ваше имя');return;}
+      pendingName=name;
+      proceedCode(phone);
+    } else {
+      // ВХОД: ищем пользователя в Firebase по номеру
+      const btn=document.getElementById('send-code-btn');
+      btn.disabled=true;btn.textContent='Проверяем…';
+      db.collection('users').doc(phone.replace(/\D/g,'')).get().then(doc=>{
+        btn.disabled=false;btn.textContent='Получить код';
+        if(doc.exists){
+          pendingName=doc.data().name||'';
+          proceedCode(phone);
+        } else {
+          alert('Этот номер не зарегистрирован.\nПерейдите на вкладку «Регистрация».');
+          setAuthMode('reg');
+          document.getElementById('phone-input').value=phone;
+        }
+      }).catch(err=>{
+        btn.disabled=false;btn.textContent='Получить код';
+        console.error(err);
+        // если users недоступна — пускаем без проверки
+        pendingName='';proceedCode(phone);
+      });
+    }
+  }
+  function proceedCode(phone){
     pendingPhone=phone;genCode=String(Math.floor(1000+Math.random()*9000));
     document.getElementById('phone-display').textContent=phone;
+    document.getElementById('auth-tabs').classList.add('hidden');
     document.getElementById('login-step-phone').classList.add('hidden');
     document.getElementById('login-step-code').classList.remove('hidden');
     setTimeout(()=>alert('Ваш код: '+genCode+'\n\n(Временно — реальные SMS подключим через сервер)'),300);
@@ -315,17 +383,58 @@
   function otpMove(inp,i){const f=document.querySelectorAll('#login-step-code .otp-inputs input');if(inp.value&&i<3)f[i+1].focus();if([...f].every(x=>x.value))verifyCode();}
   function verifyCode(){
     const f=document.querySelectorAll('#login-step-code .otp-inputs input');const code=[...f].map(x=>x.value).join('');
-    if(code===genCode){user={phone:pendingPhone};localStorage.setItem('sh_user',JSON.stringify(user));closeLogin();updateLoginChip();alert('Вы вошли! ✅');}
-    else alert('Неверный код');
+    if(code!==genCode){alert('Неверный код');return;}
+    user={name:pendingName,phone:pendingPhone};
+    localStorage.setItem('sh_user',JSON.stringify(user));
+    // при регистрации сохраняем в Firebase
+    if(authMode==='reg'){
+      db.collection('users').doc(pendingPhone.replace(/\D/g,'')).set({name:pendingName,phone:pendingPhone}).catch(e=>console.error(e));
+    }
+    closeLogin();updateLoginChip();
+    alert((authMode==='reg'?'Регистрация завершена! ✅':'Вы вошли! ✅')+'\n'+pendingName);
   }
-  function backToPhone(){document.getElementById('login-step-code').classList.add('hidden');document.getElementById('login-step-phone').classList.remove('hidden');}
+  function backToPhone(){
+    document.getElementById('login-step-code').classList.add('hidden');
+    document.getElementById('login-step-phone').classList.remove('hidden');
+    document.getElementById('auth-tabs').classList.remove('hidden');
+    document.querySelectorAll('#login-step-code .otp-inputs input').forEach(x=>x.value='');
+  }
   function logout(){user=null;localStorage.removeItem('sh_user');updateLoginChip();switchView('profile');}
   function updateLoginChip(){
     const chip=document.getElementById('login-chip');
-    if(user){chip.textContent='👤 '+user.phone;chip.classList.add('logged');chip.onclick=()=>switchView('profile');}
+    if(user){chip.textContent='👤 '+(user.name||user.phone);chip.classList.add('logged');chip.onclick=()=>switchView('profile');}
     else{chip.textContent='👤 Войти';chip.classList.remove('logged');chip.onclick=openLogin;}
     const pa=document.getElementById('profile-auth');
-    if(pa)pa.innerHTML=user?`<button class="checkout-btn" style="background:var(--surface2);" onclick="logout()">Выйти (${user.phone})</button>`:`<button class="checkout-btn" onclick="openLogin()">Войти по номеру</button>`;
+    if(pa){
+      if(user){
+        pa.innerHTML=`<p style="color:var(--text);font-weight:700;font-size:17px;margin-bottom:4px;">👋 ${user.name||''}</p><p style="color:var(--muted);margin-bottom:14px;">${user.phone}</p><button class="checkout-btn" onclick="showMyOrders()">📦 Мои заказы</button><button class="checkout-btn" style="background:var(--surface2);margin-top:10px;" onclick="logout()">Выйти</button><div id="my-orders" style="margin-top:16px;text-align:left;"></div>`;
+      } else {
+        pa.innerHTML=`<button class="checkout-btn" onclick="openLogin()">Войти по номеру</button>`;
+      }
+    }
+  }
+  const STATUS_STEPS=['Принят','Собирается','Собран','Готов'];
+  function showMyOrders(){
+    const box=document.getElementById('my-orders');
+    if(!box||!user)return;
+    box.innerHTML='<div class="loading" style="padding:30px;"><div class="spinner"></div>Загрузка заказов…</div>';
+    db.collection('orders').where('phone','==',user.phone).get().then(snap=>{
+      let orders=snap.docs.map(d=>({id:d.id,...d.data()}));
+      orders.sort((a,b)=>{const ta=a.createdAt&&a.createdAt.seconds?a.createdAt.seconds:0;const tb=b.createdAt&&b.createdAt.seconds?b.createdAt.seconds:0;return tb-ta;});
+      if(!orders.length){box.innerHTML='<div class="empty" style="padding:30px;">У вас пока нет заказов</div>';return;}
+      box.innerHTML=orders.map(o=>{
+        const step=o.statusOrder||0;
+        const dt=o.createdAt&&o.createdAt.seconds?new Date(o.createdAt.seconds*1000).toLocaleString('ru-RU',{day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}):'';
+        const itemsList=(o.items||[]).map(it=>`${it.emoji||'📦'} ${it.name} × ${it.qty}`).join('<br>');
+        const steps=STATUS_STEPS.map((s,i)=>`<div style="flex:1;text-align:center;"><div style="width:24px;height:24px;border-radius:50%;margin:0 auto 4px;background:${i<=step?'var(--accent)':'var(--surface2)'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;">${i<=step?'✓':i+1}</div><div style="font-size:10px;color:${i<=step?'var(--accent)':'var(--muted)'};">${s}</div></div>`).join('<div style="flex:0.3;height:2px;background:var(--border);margin-top:11px;"></div>');
+        return `<div class="info-card" style="margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;margin-bottom:10px;"><span style="color:var(--muted);font-size:13px;">${dt}</span><span class="price">${fmt(o.total)} ₽</span></div>
+          <div style="color:var(--text);line-height:1.6;margin-bottom:14px;">${itemsList}</div>
+          <div style="color:var(--muted);font-size:13px;margin-bottom:14px;">🚚 ${o.delivery||''}${o.address?': '+o.address:''}</div>
+          <div style="display:flex;align-items:flex-start;">${steps}</div>
+        </div>`;
+      }).join('');
+    }).catch(err=>{console.error(err);box.innerHTML='<div class="empty" style="padding:30px;">Не удалось загрузить заказы</div>';});
   }
   function switchView(v){
     ['catalog','search','cart','fav','profile'].forEach(n=>document.getElementById('view-'+n).classList.toggle('hidden',n!==v));
